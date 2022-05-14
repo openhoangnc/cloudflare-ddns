@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"flag"
+	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -14,10 +16,32 @@ import (
 	_ "github.com/hugomd/cloudflare-ddns/lib/providers/_all"
 )
 
-func checkIP() (string, error) {
-	rsp, err := http.Get("https://checkip.amazonaws.com")
-	if err != nil {
-		return "", err
+var client = http.Client{Timeout: 2 * time.Second}
+
+func isNetError(err error) bool {
+	_, ok := err.(net.Error)
+	return ok
+}
+
+func httpGet(url string) (body string, err error) {
+	fmt.Print(time.Now().Format("2006/01/02 15:04:05") + " Get " + url + " ")
+
+	var rsp *http.Response
+	for {
+		fmt.Print(".")
+		rsp, err = client.Get(url)
+		if err != nil {
+			if os.IsTimeout(err) {
+				continue
+			}
+			if isNetError(err) {
+				time.Sleep(client.Timeout)
+				continue
+			}
+			return "", err
+		}
+		fmt.Println()
+		break
 	}
 	defer rsp.Body.Close()
 
@@ -29,20 +53,13 @@ func checkIP() (string, error) {
 	return string(bytes.TrimSpace(buf)), nil
 }
 
+func checkIP() (string, error) {
+	return httpGet("https://checkip.amazonaws.com")
+}
+
 func checkIP6() (string, error) {
 	// has to be a service without A records (for ex api6.ipify.org cant be used)
-	rsp, err := http.Get("https://v6.ident.me")
-	if err != nil {
-		return "", err
-	}
-	defer rsp.Body.Close()
-
-	buf, err := ioutil.ReadAll(rsp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	return string(bytes.TrimSpace(buf)), nil
+	return httpGet("https://v6.ident.me")
 }
 
 func setEnvVarsFromConfig(filename *string) error {
@@ -85,20 +102,21 @@ func main() {
 		}
 	}
 
-	runddns(*run4, *run6)
+	runDDNS(*run4, *run6)
 
 	if runonce {
 		os.Exit(0)
 	}
 
 	for range ticker.C {
-		runddns(*run4, *run6)
+		runDDNS(*run4, *run6)
 	}
-
-	return
 }
 
-func runddns(run4, run6 bool) {
+var lastIP = ""
+var lastIP6 = ""
+
+func runDDNS(run4, run6 bool) {
 	PROVIDER := os.Getenv("PROVIDER")
 	if PROVIDER == "" {
 		log.Fatal("PROVIDER env. variable is required")
@@ -114,11 +132,14 @@ func runddns(run4, run6 bool) {
 		if err != nil {
 			panic(err)
 		}
-		log.Printf("IP is %s", ip)
 
-		err = provider.UpdateRecord(ip)
-		if err != nil {
-			panic(err)
+		log.Printf("IP is %s changed=%v", ip, ip != lastIP)
+		if ip != lastIP {
+			lastIP = ip
+			err = provider.UpdateRecord(ip)
+			if err != nil {
+				panic(err)
+			}
 		}
 	}
 
@@ -127,11 +148,14 @@ func runddns(run4, run6 bool) {
 		if err != nil {
 			panic(err)
 		}
-		log.Printf("IPv6 is %s", ip)
 
-		err = provider.UpdateRecord6(ip)
-		if err != nil {
-			panic(err)
+		log.Printf("IPv6 is %s changed=%v", ip, ip != lastIP6)
+		if ip != lastIP6 {
+			lastIP6 = ip
+			err = provider.UpdateRecord6(ip)
+			if err != nil {
+				panic(err)
+			}
 		}
 	}
 }
