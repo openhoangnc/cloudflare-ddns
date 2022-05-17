@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -80,6 +81,8 @@ func setEnvVarsFromConfig(filename *string) error {
 }
 
 func main() {
+	runtime.GOMAXPROCS(1)
+
 	var runonce bool
 	var ticker *time.Ticker
 
