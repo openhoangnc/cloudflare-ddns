@@ -1,0 +1,18 @@
+[package]
+name = "cloudflare-ddns"
+version = "3.0.0"
+edition = "2024"
+authors = ["cloudflare-ddns contributors"]
+license = "MIT"
+description = "A lightweight, high-performance Cloudflare DDNS updater"
+
+[dependencies]
+# Minimal dependencies - just a simple HTTP client  
+ureq = { version = "3.2", default-features = false, features = ["rustls"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

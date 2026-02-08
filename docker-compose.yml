@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  cloudflare-ddns:
+    image: ghcr.io/openhoangnc/cloudflare-ddns:latest
+    container_name: cloudflare-ddns
+    restart: unless-stopped
+    environment:
+      # Set these values directly or pass them from your shell environment
+      - CLOUDFLARE_APITOKEN
+      - CLOUDFLARE_ZONEID
+      - CLOUDFLARE_HOST
+    command: ["-duration", "2h"]

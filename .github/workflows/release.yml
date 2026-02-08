@@ -1,38 +1,91 @@
-name: Build binaries
+name: Build and Release
 on: 
   release:
     types: [created]
 
 jobs:
-  compile:
-    name: ${{ matrix.binaries }}
-    runs-on: ubuntu-latest
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       matrix:
-        binaries: [release-linux-386, release-linux-amd64, release-darwin-386, release-darwin-amd64, release-windows-386, release-windows-amd64]
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact_name: cloudflare-ddns
+            asset_name: cloudflare-ddns-linux-amd64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            artifact_name: cloudflare-ddns
+            asset_name: cloudflare-ddns-linux-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: cloudflare-ddns
+            asset_name: cloudflare-ddns-darwin-amd64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: cloudflare-ddns
+            asset_name: cloudflare-ddns-darwin-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: cloudflare-ddns.exe
+            asset_name: cloudflare-ddns-windows-amd64.exe
     steps:
-      - uses: jungwinter/split@v1
-        id: split
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
         with:
-          msg: ${{ matrix.binaries }}
-          seperator: '-'
-      - uses: actions/checkout@master
-      - name: compile and release
-        uses: ngs/go-release.action@v1.0.1
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --target ${{ matrix.target }}
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GOARCH: ${{ steps.split.outputs._2 }}
-          GOOS: ${{ steps.split.outputs._1 }}
-  release:
-    needs: [compile]
-    name: Docker upload
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@master
-      - name: Upload to Docker 
-        uses: docker/build-push-action@v1
         with:
-          repository: hugomd/cloudflare-ddns
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-          tag_with_ref: true
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+          asset_name: ${{ matrix.asset_name }}
+          asset_content_type: application/octet-stream
+  
+  docker-release:
+    needs: [build-binaries]
+    name: Docker Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+

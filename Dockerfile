@@ -1,10 +1,11 @@
-FROM golang:1.13-alpine AS build-env
-WORKDIR /go/src/github.com/hugomd/cloudflare-ddns/
-RUN apk add ca-certificates
-ADD . /go/src/github.com/hugomd/cloudflare-ddns/
-RUN cd /go/src/github.com/hugomd/cloudflare-ddns && CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
+FROM rust:1.93-alpine AS builder
+WORKDIR /app
+RUN apk add --no-cache musl-dev
+COPY Cargo.toml ./
+COPY src ./src
+RUN cargo build --release --target x86_64-unknown-linux-musl
 
 FROM scratch
-COPY --from=build-env /go/src/github.com/hugomd/cloudflare-ddns/main /
-COPY --from=build-env /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-ENTRYPOINT ["/main"]
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/cloudflare-ddns /cloudflare-ddns
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+ENTRYPOINT ["/cloudflare-ddns"]
