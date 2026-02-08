@@ -15,5 +15,8 @@ Cargo.lock
 .DS_Store
 Thumbs.db
 
+# Environment
+.env
+
 # Scripts
 *.sh

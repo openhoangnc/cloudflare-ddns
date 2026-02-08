@@ -6,31 +6,60 @@ Updates a given DNS record with your current IP address. This Rust implementatio
 
 ## Quick Start
 
+### Docker Run
+
 Example with Cloudflare:
-```
+```bash
 docker run \
   -e CLOUDFLARE_APITOKEN=YOUR_API_TOKEN \
   -e CLOUDFLARE_ZONEID=YOUR_ZONE_ID \
   -e CLOUDFLARE_HOST=YOUR_DOMAIN \
-  openhoangnc/cloudflare-ddns:3.0.0
+  ghcr.io/openhoangnc/cloudflare-ddns:latest
 ```
 
 Example running as a persistent daemon:
-```
+```bash
 docker run -d --restart always \
   -e CLOUDFLARE_APITOKEN=YOUR_API_TOKEN \
   -e CLOUDFLARE_ZONEID=YOUR_ZONE_ID \
   -e CLOUDFLARE_HOST=YOUR_DOMAIN \
-  openhoangnc/cloudflare-ddns:3.0.0 -duration 2h
+  ghcr.io/openhoangnc/cloudflare-ddns:latest -duration 2h
 ```
 
-You can load environment variables through a config file of key/value pairs:
+### Docker Compose
 
-```sh
-echo "CLOUDFLARE_APITOKEN=YOUR_API_TOKEN" > config.env
-docker run \
-  -v $PWD/config.env:/tmp/config.env \
-  openhoangnc/cloudflare-ddns:3.0.0 -config /tmp/config.env
+Create a `.env` file with your credentials:
+```bash
+cp .env.example .env
+# Edit .env with your values
+```
+
+Start the service:
+```bash
+docker-compose up -d
+```
+
+Example `docker-compose.yml`:
+```yaml
+version: '3.8'
+
+services:
+  cloudflare-ddns:
+    image: ghcr.io/openhoangnc/cloudflare-ddns:latest
+    container_name: cloudflare-ddns
+    restart: unless-stopped
+    environment:
+      - CLOUDFLARE_APITOKEN=${CLOUDFLARE_APITOKEN}
+      - CLOUDFLARE_ZONEID=${CLOUDFLARE_ZONEID}
+      - CLOUDFLARE_HOST=${CLOUDFLARE_HOST}
+    command: ["-duration", "2h"]
+```
+
+Example `.env` file:
+```bash
+CLOUDFLARE_APITOKEN=your_api_token_here
+CLOUDFLARE_ZONEID=your_zone_id_here
+CLOUDFLARE_HOST=subdomain.example.com
 ```
 
 ## Performance
@@ -58,7 +87,6 @@ docker build -t cloudflare-ddns .
 | Parameter             | Description                                                                                                                                                                | Example           | Required |
 |-----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------|----------|
 | `-duration`           | Runs program perpetually and recheck after specified interval; parses time strings such as `5m`, `15m`, `2h`. If not specified, run once and exit. | 2h                | `false`  |
-| `-config`             | Loads environment variables from a given file. Variables should be specified as lines of `key=value` pairs. No variables will be loaded if a file is not specified.        | `/tmp/config.env` | `false`  |
 | `-ipv4`             | Enable updates for IPv4 records. Default is `true`        | `false` | `false`  |
 | `-ipv6`             | Enable updates for IPv6 records. Default is `false`        | `true` | `false`  |
 

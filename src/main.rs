@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::fs;
 use std::time::Duration;
 use tokio::time;
 
@@ -37,7 +36,6 @@ impl Config {
         let mut interval = None;
         let mut update_ipv4 = true;
         let mut update_ipv6 = false;
-        let mut config_file: Option<String> = None;
 
         // Parse command line arguments manually for minimal dependencies
         let args: Vec<String> = env::args().collect();
@@ -50,14 +48,6 @@ impl Config {
                         i += 2;
                     } else {
                         return Err("Missing value for -duration".to_string());
-                    }
-                }
-                "-config" => {
-                    if i + 1 < args.len() {
-                        config_file = Some(args[i + 1].clone());
-                        i += 2;
-                    } else {
-                        return Err("Missing value for -config".to_string());
                     }
                 }
                 "-ipv4" => {
@@ -80,11 +70,6 @@ impl Config {
             }
         }
 
-        // Load config file if specified
-        if let Some(path) = config_file {
-            load_env_from_file(&path)?;
-        }
-
         let api_token = env::var("CLOUDFLARE_APITOKEN")
             .map_err(|_| "CLOUDFLARE_APITOKEN environment variable is required".to_string())?;
         let zone_id = env::var("CLOUDFLARE_ZONEID")
@@ -101,18 +86,6 @@ impl Config {
             update_ipv6,
         })
     }
-}
-
-fn load_env_from_file(path: &str) -> Result<(), String> {
-    let contents = fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read config file: {}", e))?;
-    
-    for line in contents.lines() {
-        if let Some((key, value)) = line.split_once('=') {
-            env::set_var(key.trim(), value.trim());
-        }
-    }
-    Ok(())
 }
 
 fn parse_duration(s: &str) -> Result<Duration, String> {
