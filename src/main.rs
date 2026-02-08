@@ -170,11 +170,7 @@ async fn get_public_ip(url: &str) -> Result<String, String> {
                     .to_string();
                 return Ok(ip);
             }
-            Err(e) if e.is_timeout() && retries < 3 => {
-                retries += 1;
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            }
-            Err(e) if e.is_connect() && retries < 3 => {
+            Err(e) if (e.is_timeout() || e.is_connect()) && retries < 3 => {
                 retries += 1;
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
@@ -294,13 +290,9 @@ async fn update_record(
         .find(|r| r.name == config.host)
         .ok_or("Host not found in DNS records")?;
 
-    if ip != record.content {
-        update_dns_record(client, &config.api_token, &config.zone_id, record, ip).await?;
-        println!("IP changed, updated to {}", ip);
-        *last_ip = ip.to_string();
-    } else {
-        println!("No change in IP, not updating record");
-    }
+    update_dns_record(client, &config.api_token, &config.zone_id, record, ip).await?;
+    println!("IP changed, updated to {}", ip);
+    *last_ip = ip.to_string();
 
     Ok(())
 }
