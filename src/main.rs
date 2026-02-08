@@ -129,26 +129,27 @@ fn parse_json_array(json: &str, key: &str) -> Vec<String> {
             
             while i < chars.len() {
                 match chars[i] {
-                    '[' => {}, // Start of array
-                    '{' if !in_object => {
-                        in_object = true;
-                        brace_count = 1;
-                        current_obj.clear();
-                        current_obj.push('{');
+                    '[' if !in_object => {}, // Start of array
+                    '{' => {
+                        if !in_object {
+                            in_object = true;
+                            brace_count = 1;
+                            current_obj.clear();
+                            current_obj.push('{');
+                        } else {
+                            brace_count += 1;
+                            current_obj.push('{');
+                        }
                     },
                     '}' if in_object => {
-                        brace_count -= 1;
                         current_obj.push('}');
+                        brace_count -= 1;
                         if brace_count == 0 {
                             results.push(current_obj.clone());
                             in_object = false;
                         }
                     },
-                    '{' if in_object => {
-                        brace_count += 1;
-                        current_obj.push('{');
-                    },
-                    ']' => break,
+                    ']' if !in_object => break,
                     c if in_object => current_obj.push(c),
                     _ => {},
                 }
