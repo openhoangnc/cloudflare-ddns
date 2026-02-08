@@ -6,7 +6,8 @@ services:
     container_name: cloudflare-ddns
     restart: unless-stopped
     environment:
-      - CLOUDFLARE_APITOKEN=${CLOUDFLARE_APITOKEN}
-      - CLOUDFLARE_ZONEID=${CLOUDFLARE_ZONEID}
-      - CLOUDFLARE_HOST=${CLOUDFLARE_HOST}
+      # Set these values directly or pass them from your shell environment
+      - CLOUDFLARE_APITOKEN
+      - CLOUDFLARE_ZONEID
+      - CLOUDFLARE_HOST
     command: ["-duration", "2h"]

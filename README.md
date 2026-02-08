@@ -28,10 +28,11 @@ docker run -d --restart always \
 
 ### Docker Compose
 
-Create a `.env` file with your credentials:
+Set environment variables in your shell:
 ```bash
-cp .env.example .env
-# Edit .env with your values
+export CLOUDFLARE_APITOKEN=your_api_token_here
+export CLOUDFLARE_ZONEID=your_zone_id_here
+export CLOUDFLARE_HOST=subdomain.example.com
 ```
 
 Start the service:
@@ -49,17 +50,19 @@ services:
     container_name: cloudflare-ddns
     restart: unless-stopped
     environment:
-      - CLOUDFLARE_APITOKEN=${CLOUDFLARE_APITOKEN}
-      - CLOUDFLARE_ZONEID=${CLOUDFLARE_ZONEID}
-      - CLOUDFLARE_HOST=${CLOUDFLARE_HOST}
+      # Pass from shell environment or set directly
+      - CLOUDFLARE_APITOKEN
+      - CLOUDFLARE_ZONEID
+      - CLOUDFLARE_HOST
     command: ["-duration", "2h"]
 ```
 
-Example `.env` file:
-```bash
-CLOUDFLARE_APITOKEN=your_api_token_here
-CLOUDFLARE_ZONEID=your_zone_id_here
-CLOUDFLARE_HOST=subdomain.example.com
+Alternatively, set values directly in docker-compose.yml:
+```yaml
+    environment:
+      - CLOUDFLARE_APITOKEN=your_token_here
+      - CLOUDFLARE_ZONEID=your_zone_here
+      - CLOUDFLARE_HOST=subdomain.example.com
 ```
 
 ## Performance
