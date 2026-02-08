@@ -1,26 +1,10 @@
-use serde::{Deserialize, Serialize};
 use std::env;
+use std::thread;
 use std::time::Duration;
-use tokio::time;
 
 const IPV4_CHECK_URL: &str = "https://checkip.amazonaws.com";
 const IPV6_CHECK_URL: &str = "https://v6.ident.me";
 const CLOUDFLARE_API_BASE: &str = "https://api.cloudflare.com/client/v4";
-
-#[derive(Debug, Deserialize)]
-struct DnsRecordsResponse {
-    result: Vec<DnsRecord>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct DnsRecord {
-    id: String,
-    #[serde(rename = "type")]
-    record_type: String,
-    name: String,
-    content: String,
-    proxied: bool,
-}
 
 struct Config {
     api_token: String,
@@ -37,7 +21,6 @@ impl Config {
         let mut update_ipv4 = true;
         let mut update_ipv6 = false;
 
-        // Parse command line arguments manually for minimal dependencies
         let args: Vec<String> = env::args().collect();
         let mut i = 1;
         while i < args.len() {
@@ -115,135 +98,168 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
     }
 }
 
-async fn get_public_ip(url: &str) -> Result<String, String> {
-    // Get current time
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap();
-    let secs = now.as_secs();
-    let timestamp = format_timestamp(secs);
+fn http_get(url: &str) -> Result<String, String> {
+    let mut response = ureq::get(url)
+        .call()
+        .map_err(|e| format!("HTTP GET failed: {}", e))?;
     
-    print!("{} Get {} ", timestamp, url);
+    response.body_mut()
+        .read_to_string()
+        .map_err(|e| format!("Failed to read response: {}", e))
+}
+
+fn get_public_ip(url: &str) -> Result<String, String> {
+    println!("Getting IP from {}", url);
+    http_get(url).map(|s| s.trim().to_string())
+}
+
+// Minimal JSON parsing - just extract what we need from Cloudflare API
+fn parse_json_array(json: &str, key: &str) -> Vec<String> {
+    let mut results = Vec::new();
+    let mut in_object = false;
+    let mut current_obj = String::new();
+    let mut brace_count = 0;
     
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-    
-    let mut retries = 0;
-    loop {
-        print!(".");
-        let _ = std::io::Write::flush(&mut std::io::stdout());
-        match client.get(url).send().await {
-            Ok(response) => {
-                println!();
-                let ip = response.text().await
-                    .map_err(|e| format!("Failed to read response: {}", e))?
-                    .trim()
-                    .to_string();
-                return Ok(ip);
-            }
-            Err(e) if (e.is_timeout() || e.is_connect()) && retries < 3 => {
-                retries += 1;
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            }
-            Err(e) => {
-                println!();
-                return Err(format!("Failed to get IP from {}: {}", url, e));
+    // Find the key's array
+    if let Some(start) = json.find(&format!("\"{}\"", key)) {
+        let rest = &json[start..];
+        if let Some(array_start) = rest.find('[') {
+            let chars: Vec<char> = rest[array_start..].chars().collect();
+            let mut i = 0;
+            
+            while i < chars.len() {
+                match chars[i] {
+                    '[' => {}, // Start of array
+                    '{' if !in_object => {
+                        in_object = true;
+                        brace_count = 1;
+                        current_obj.clear();
+                        current_obj.push('{');
+                    },
+                    '}' if in_object => {
+                        brace_count -= 1;
+                        current_obj.push('}');
+                        if brace_count == 0 {
+                            results.push(current_obj.clone());
+                            in_object = false;
+                        }
+                    },
+                    '{' if in_object => {
+                        brace_count += 1;
+                        current_obj.push('{');
+                    },
+                    ']' => break,
+                    c if in_object => current_obj.push(c),
+                    _ => {},
+                }
+                i += 1;
             }
         }
     }
+    
+    results
 }
 
-fn format_timestamp(secs: u64) -> String {
-    // Simple timestamp formatter to avoid chrono dependency
-    const SECONDS_PER_DAY: u64 = 86400;
-    const SECONDS_PER_HOUR: u64 = 3600;
-    const SECONDS_PER_MINUTE: u64 = 60;
-    
-    let days_since_epoch = secs / SECONDS_PER_DAY;
-    let remaining = secs % SECONDS_PER_DAY;
-    let hours = remaining / SECONDS_PER_HOUR;
-    let remaining = remaining % SECONDS_PER_HOUR;
-    let minutes = remaining / SECONDS_PER_MINUTE;
-    let seconds = remaining % SECONDS_PER_MINUTE;
-    
-    // Simplified date calculation (approximate)
-    let year = 1970 + (days_since_epoch / 365);
-    let day_of_year = days_since_epoch % 365;
-    let month = (day_of_year / 30) + 1;
-    let day = (day_of_year % 30) + 1;
-    
-    format!("{:04}/{:02}/{:02} {:02}:{:02}:{:02}", year, month, day, hours, minutes, seconds)
+fn extract_json_string(json: &str, key: &str) -> Option<String> {
+    let search = format!("\"{}\"", key);
+    if let Some(start) = json.find(&search) {
+        let rest = &json[start + search.len()..];
+        if let Some(colon) = rest.find(':') {
+            let after_colon = &rest[colon + 1..].trim_start();
+            if after_colon.starts_with('"') {
+                if let Some(end) = after_colon[1..].find('"') {
+                    return Some(after_colon[1..=end].to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
-async fn get_dns_records(
-    client: &reqwest::Client,
+fn extract_json_bool(json: &str, key: &str) -> Option<bool> {
+    let search = format!("\"{}\"", key);
+    if let Some(start) = json.find(&search) {
+        let rest = &json[start + search.len()..];
+        if let Some(colon) = rest.find(':') {
+            let after_colon = &rest[colon + 1..].trim_start();
+            if after_colon.starts_with("true") {
+                return Some(true);
+            } else if after_colon.starts_with("false") {
+                return Some(false);
+            }
+        }
+    }
+    None
+}
+
+fn get_dns_records(
     api_token: &str,
     zone_id: &str,
     host: &str,
     record_type: &str,
-) -> Result<Vec<DnsRecord>, String> {
+) -> Result<Vec<(String, String, String, bool)>, String> {
     let url = format!(
         "{}/zones/{}/dns_records?type={}&name={}",
         CLOUDFLARE_API_BASE, zone_id, record_type, host
     );
 
-    let response = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", api_token))
-        .send()
-        .await
+    let mut response = ureq::get(&url)
+        .header("Authorization", &format!("Bearer {}", api_token))
+        .call()
         .map_err(|e| format!("Failed to get DNS records: {}", e))?;
+    
+    let body = response.body_mut()
+        .read_to_string()
+        .map_err(|e| format!("Failed to read response: {}", e))?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("API error {}: {}", status, body));
+    let mut records = Vec::new();
+    for obj in parse_json_array(&body, "result") {
+        if let (Some(id), Some(name), Some(content), Some(record_type)) = (
+            extract_json_string(&obj, "id"),
+            extract_json_string(&obj, "name"),
+            extract_json_string(&obj, "content"),
+            extract_json_string(&obj, "type"),
+        ) {
+            let proxied = extract_json_bool(&obj, "proxied").unwrap_or(false);
+            if name == host {
+                records.push((id, record_type, content, proxied));
+            }
+        }
     }
 
-    let records: DnsRecordsResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse DNS records: {}", e))?;
-
-    Ok(records.result)
+    Ok(records)
 }
 
-async fn update_dns_record(
-    client: &reqwest::Client,
+fn update_dns_record(
     api_token: &str,
     zone_id: &str,
-    record: &DnsRecord,
-    new_ip: &str,
+    record_id: &str,
+    record_type: &str,
+    name: &str,
+    content: &str,
+    proxied: bool,
 ) -> Result<(), String> {
     let url = format!(
         "{}/zones/{}/dns_records/{}",
-        CLOUDFLARE_API_BASE, zone_id, record.id
+        CLOUDFLARE_API_BASE, zone_id, record_id
     );
 
-    let mut updated_record = record.clone();
-    updated_record.content = new_ip.to_string();
+    // Build minimal JSON manually
+    let json = format!(
+        r#"{{"type":"{}","name":"{}","content":"{}","proxied":{}}}"#,
+        record_type, name, content, proxied
+    );
 
-    let response = client
-        .put(&url)
-        .header("Authorization", format!("Bearer {}", api_token))
-        .json(&updated_record)
-        .send()
-        .await
+    ureq::put(&url)
+        .header("Authorization", &format!("Bearer {}", api_token))
+        .header("Content-Type", "application/json")
+        .send(json.as_bytes())
         .map_err(|e| format!("Failed to update DNS record: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("Failed to update record, status {}: {}", status, body));
-    }
 
     Ok(())
 }
 
-async fn update_record(
-    client: &reqwest::Client,
+fn update_record(
     config: &Config,
     ip: &str,
     record_type: &str,
@@ -256,41 +272,49 @@ async fn update_record(
         return Ok(());
     }
 
-    let records = get_dns_records(client, &config.api_token, &config.zone_id, &config.host, record_type).await?;
+    let records = get_dns_records(&config.api_token, &config.zone_id, &config.host, record_type)?;
 
-    let record = records
-        .iter()
-        .find(|r| r.name == config.host)
-        .ok_or("Host not found in DNS records")?;
+    if records.is_empty() {
+        return Err("Host not found in DNS records".to_string());
+    }
 
-    update_dns_record(client, &config.api_token, &config.zone_id, record, ip).await?;
+    let (record_id, rec_type, _, proxied) = &records[0];
+    
+    update_dns_record(
+        &config.api_token,
+        &config.zone_id,
+        record_id,
+        rec_type,
+        &config.host,
+        ip,
+        *proxied,
+    )?;
+    
     println!("IP changed, updated to {}", ip);
     *last_ip = ip.to_string();
 
     Ok(())
 }
 
-async fn run_ddns_update(
-    client: &reqwest::Client,
+fn run_ddns_update(
     config: &Config,
     last_ipv4: &mut String,
     last_ipv6: &mut String,
 ) -> Result<(), String> {
     if config.update_ipv4 {
-        let ip = get_public_ip(IPV4_CHECK_URL).await?;
-        update_record(client, config, &ip, "A", last_ipv4).await?;
+        let ip = get_public_ip(IPV4_CHECK_URL)?;
+        update_record(config, &ip, "A", last_ipv4)?;
     }
 
     if config.update_ipv6 {
-        let ip = get_public_ip(IPV6_CHECK_URL).await?;
-        update_record(client, config, &ip, "AAAA", last_ipv6).await?;
+        let ip = get_public_ip(IPV6_CHECK_URL)?;
+        update_record(config, &ip, "AAAA", last_ipv6)?;
     }
 
     Ok(())
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let config = match Config::from_env_and_args() {
         Ok(c) => c,
         Err(e) => {
@@ -299,16 +323,11 @@ async fn main() {
         }
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .expect("Failed to create HTTP client");
-
     let mut last_ipv4 = String::new();
     let mut last_ipv6 = String::new();
 
     // Run once immediately
-    if let Err(e) = run_ddns_update(&client, &config, &mut last_ipv4, &mut last_ipv6).await {
+    if let Err(e) = run_ddns_update(&config, &mut last_ipv4, &mut last_ipv6) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
@@ -319,12 +338,10 @@ async fn main() {
     }
 
     // Run on interval
-    let mut interval_timer = time::interval(config.interval.unwrap());
-    interval_timer.tick().await; // First tick completes immediately
-
+    let interval = config.interval.unwrap();
     loop {
-        interval_timer.tick().await;
-        if let Err(e) = run_ddns_update(&client, &config, &mut last_ipv4, &mut last_ipv6).await {
+        thread::sleep(interval);
+        if let Err(e) = run_ddns_update(&config, &mut last_ipv4, &mut last_ipv6) {
             eprintln!("Error: {}", e);
             // Continue running on error
         }
