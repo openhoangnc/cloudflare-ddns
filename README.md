@@ -65,6 +65,20 @@ Alternatively, set values directly in docker-compose.yml:
       - CLOUDFLARE_HOST=subdomain.example.com
 ```
 
+## Public IP Detection
+
+The current public IP is read from Cloudflare's own `/cdn-cgi/trace` endpoint,
+addressed by resolver IP literal so no DNS lookup is needed and each check is
+pinned to the address family it reports on:
+
+| Record | Endpoint |
+| ------ | -------- |
+| `A` (IPv4)    | `https://1.1.1.1/cdn-cgi/trace` |
+| `AAAA` (IPv6) | `https://[2606:4700:4700::1111]/cdn-cgi/trace` |
+
+No third-party IP-echo service is contacted - the only hosts this tool talks to
+are Cloudflare's.
+
 ## Performance
 
 This minimal Rust implementation provides:
