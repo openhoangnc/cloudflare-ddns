@@ -2,8 +2,10 @@ use std::env;
 use std::thread;
 use std::time::Duration;
 
-const IPV4_CHECK_URL: &str = "https://checkip.amazonaws.com";
-const IPV6_CHECK_URL: &str = "https://v6.ident.me";
+// Cloudflare's own trace endpoint, reached by resolver IP literal: no DNS
+// lookup, and the literal pins the address family we're asking about.
+const IPV4_CHECK_URL: &str = "https://1.1.1.1/cdn-cgi/trace";
+const IPV6_CHECK_URL: &str = "https://[2606:4700:4700::1111]/cdn-cgi/trace";
 const CLOUDFLARE_API_BASE: &str = "https://api.cloudflare.com/client/v4";
 
 struct Config {
@@ -110,7 +112,24 @@ fn http_get(url: &str) -> Result<String, String> {
 
 fn get_public_ip(url: &str) -> Result<String, String> {
     println!("Getting IP from {}", url);
-    http_get(url).map(|s| s.trim().to_string())
+    let body = http_get(url)?;
+    parse_ip_response(&body)
+}
+
+// Accepts either a bare address or a cdn-cgi/trace body (key=value lines).
+fn parse_ip_response(body: &str) -> Result<String, String> {
+    for line in body.lines() {
+        if let Some(ip) = line.trim().strip_prefix("ip=") {
+            return Ok(ip.to_string());
+        }
+    }
+
+    let trimmed = body.trim();
+    if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
+        return Err(format!("Unexpected IP response: {}", trimmed));
+    }
+
+    Ok(trimmed.to_string())
 }
 
 // Minimal JSON parsing - just extract what we need from Cloudflare API
